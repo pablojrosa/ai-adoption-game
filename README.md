@@ -1,35 +1,72 @@
 # AI Adoption Game
 
-A small React + TypeScript browser game built with Vite. The current MVP is a timed grid-collection game: the player moves around a 10x10 board, collects coins, and tries to maximize score before the 30-second timer ends.
+A small full-stack browser game built with React, TypeScript, Vite, and a tiny Node + SQLite API. The current playable build supports two arcade modes on the same 10x10 grid: a timed score-attack mode and a coin-race mode with an instant-loss obstacle.
 
 ![Gameplay preview](docs/gameplay-preview.gif)
 
 This document covers:
 
 - what the game currently does
+- how record persistence works
 - how the code is structured
 - how to run and test it
 - current limitations
-- the recommended next steps for new features
+- recommended next steps
+
+## Current Status
+
+There are still two layers to the project:
+
+- Current implementation: a fully playable arcade MVP presented in the UI as `Grid Collector`
+- Planned direction: an `AI Adoption Game` theme described in the planning documents
+
+The shipped code is no longer the original single-mode collector game. It now has:
+
+- `Time mode`
+- `Coin mode`
+- a persistent obstacle hazard
+- SQLite-backed per-mode records
+- extracted game rules in `src/game.ts`
+
+The AI-adoption framing is still mostly a product direction rather than implemented gameplay.
 
 ## Product Summary
 
-The game is intentionally simple:
+The current loop is intentionally simple:
 
 - The player starts in the top-left cell.
-- A single coin spawns in a random cell that is not occupied by the player.
+- The player chooses between `Time mode` and `Coin mode`.
+- Each round places one coin and one obstacle on valid cells.
 - The player moves with arrow keys or `WASD`.
-- Each collected coin increases the score by 1 and respawns the next coin in another random cell.
-- The game ends when the countdown reaches `0`.
+- Collecting a coin increases the score by `1`.
+- The next coin respawns immediately in another valid cell.
+- Touching the obstacle ends the run immediately as a loss.
+- `Time mode` ends when the 30-second timer reaches `0`.
+- `Coin mode` ends when the player collects `10` coins.
 - The player can restart at any time.
 
-This is a good interview MVP because it already demonstrates:
+This is still a strong interview MVP because it demonstrates:
 
 - explicit game state
 - keyboard interaction
 - timer-based gameplay
 - deterministic movement rules
-- a complete playable loop in a very small codebase
+- mode-specific win/loss conditions
+- backend-backed persistence with a very small server
+
+## Persistence
+
+Successful completed runs are stored in a local SQLite database.
+
+- The backend creates `data/game.db` automatically.
+- Records are read from `/api/records`.
+- Successful results are posted to `/api/records`.
+- `Time mode` stores the highest score.
+- `Coin mode` stores the lowest completion time.
+- Lost runs are not saved.
+- If an older `scores` table exists, the backend migrates it into the new record format for time mode.
+
+The server still exposes `/api/high-score` and `/api/scores` for compatibility, but the current frontend uses `/api/records`.
 
 ## Current Gameplay Rules
 
@@ -38,6 +75,23 @@ This is a good interview MVP because it already demonstrates:
 - Grid size: `10 x 10`
 - Total cells: `100`
 - Player start position: row `0`, column `0`
+- One obstacle exists for the duration of each round
+- The coin never overlaps the player or obstacle
+
+### Modes
+
+`Time mode`
+
+- Starts with `30` seconds
+- Score increases by collecting coins
+- The run ends when time reaches `0`
+- Best record is the highest score
+
+`Coin mode`
+
+- Tracks `elapsedTime` instead of a countdown
+- The run ends when the player reaches `10` coins
+- Best record is the lowest completion time
 
 ### Movement
 
@@ -46,46 +100,43 @@ This is a good interview MVP because it already demonstrates:
   - `W`, `A`, `S`, `D`
 - Movement is clamped to the board boundaries.
 - Invalid keys do nothing.
-- When the game is over, movement is disabled.
+- Movement is disabled unless the round is in the `playing` phase.
 
-### Scoring
+### Hazard
 
-- Collecting a coin gives `+1` point.
-- Only one coin exists at a time.
-- A new coin appears immediately after the current one is collected.
-
-### Timer
-
-- Match duration: `30` seconds
-- The timer decreases once per second.
-- The timer never goes below `0`.
-- When the timer reaches `0`, the game enters the game-over state.
+- One obstacle token is placed each round.
+- Touching it ends the run immediately with a loss.
 
 ### Restart
 
-Restarting resets:
+Restarting or starting a fresh round resets:
 
 - player position
 - score
 - remaining time
+- elapsed time
 - coin position
+- obstacle position
+- pending record submission state
 
 ## UI Overview
 
-The app is a single screen with four parts:
+The app is a single screen with these main areas:
 
 1. Header copy
-2. Status bar
-3. Game board
-4. Footer with contextual message and restart button
+2. Mode selector
+3. Status bar
+4. Game board
+5. Footer message and primary action button
 
 ### Status Bar
 
 The status bar shows:
 
-- current score
+- current score or coin count
+- best record for the selected mode
 - current player coordinates
-- time left
+- time left or elapsed time, depending on mode
 
 ### Board Rendering
 
@@ -93,8 +144,9 @@ The board is rendered as a flat array of `100` cells. For each index:
 
 - the row is `Math.floor(index / GRID_SIZE)`
 - the column is `index % GRID_SIZE`
-- the cell conditionally renders:
+- the cell can render:
   - a coin token
+  - an obstacle token
   - a player token
 
 ### Visual Style
@@ -103,132 +155,84 @@ The current UI uses:
 
 - a light gradient page background
 - a centered card layout
-- simple colored circular tokens for player and coin
+- a mode selector for pre-game setup
+- simple circular tokens for coin, obstacle, and player
 - responsive stacking on smaller screens
-
-The design is intentionally lightweight and easy to iterate on during an interview.
 
 ## Code Structure
 
-The app is currently organized as a minimal Vite frontend:
+The app is organized as a minimal frontend plus a small local backend:
 
 ```text
 src/
   App.tsx       main game logic and UI
   App.css       game-specific styles
+  game.ts       constants, types, and pure game helpers
   index.css     global styles
   main.tsx      React entry point
+server/
+  server.mjs    SQLite API + static file server
+  dev.mjs       one-command local dev runner
+data/
+  .gitkeep      keeps the directory in git
+  game.db       created automatically on first backend run
 ```
 
-### `src/main.tsx`
+### `src/game.ts`
 
-Responsible for:
+This file now owns the reusable game rules and types. It contains:
 
-- bootstrapping React
-- rendering `<App />` inside `#root`
-- loading global styles
+- constants such as `GRID_SIZE`, `GAME_DURATION_SECONDS`, and `COIN_MODE_TARGET`
+- `Position`, `GameMode`, `GamePhase`, and `BestRecords`
+- `positionsEqual`
+- `movePlayer`
+- `getRandomAvailablePosition`
+- `createRoundLayout`
+
+These helpers are pure and are the best place to start when adding tests.
 
 ### `src/App.tsx`
 
-This is the core of the project. It contains:
+This is the main UI coordinator. It contains:
 
-- game constants
-- the `Position` type
-- helper functions
-- all game state
-- keyboard handling
+- mode selection
+- game phases (`ready`, `playing`, `timeUp`, `won`, `lost`)
+- record fetching and submission
 - timer lifecycle
-- board rendering
+- keyboard handling
+- round reset/start behavior
+- board rendering and footer messaging
 
-#### Constants
+### `server/server.mjs`
 
-- `GRID_SIZE = 10`
-- `GAME_DURATION_SECONDS = 30`
-- `START_POSITION = { row: 0, col: 0 }`
+Responsible for:
 
-These make the current rules easy to understand and change.
-
-#### Types
-
-`Position` is the main domain type:
-
-```ts
-type Position = {
-  row: number
-  col: number
-}
-```
-
-This keeps the board model explicit and readable.
-
-#### Helper Functions
-
-`getRandomCoinPosition(player)`
-
-- builds a list of all valid cells except the player's current cell
-- picks one random position
-
-`movePlayer(player, key)`
-
-- maps keyboard input to a new position
-- clamps movement to the grid boundaries
-- returns the same position object when the key is unsupported
-
-These helpers are pure and are good candidates to keep extracting as the game grows.
-
-#### React State
-
-The current component uses four pieces of state:
-
-- `player`
-- `score`
-- `timeLeft`
-- `coin`
-
-Derived state:
-
-- `isGameOver = timeLeft === 0`
-
-This is a good MVP pattern because the state is explicit and easy to inspect.
-
-#### Effects
-
-There are two `useEffect` hooks:
-
-1. Timer effect
-   - starts a 1-second interval while the game is active
-   - decrements the timer
-   - clears itself on cleanup
-
-2. Keyboard effect
-   - subscribes to `keydown`
-   - computes the next player position
-   - prevents page scrolling for valid movement keys
-   - checks coin collection
-   - updates player, score, and coin
+- creating the SQLite database and `score_records` table
+- migrating legacy `scores` rows when present
+- returning current best records
+- saving successful run records
+- serving the built frontend with the API when using `npm run start`
 
 ## Technical Decisions
 
-The current implementation favors simplicity over abstraction:
+The current implementation still favors simplicity over abstraction:
 
 - Single-screen app
 - No external state library
 - No router
-- No backend
-- No persistence
+- Tiny local backend
+- SQLite persistence
+- Extracted pure rules in `src/game.ts`
 - No custom hooks yet
 - No test suite yet
 
-This is appropriate for the current scope and aligns well with interview constraints.
-
-### Why This Approach Works Well for an MVP
-
-- The entire game loop is easy to explain in one file.
-- Rules are visible without jumping through many abstractions.
-- The code is small enough to refactor safely if a new feature is requested.
-- Most future features can be added incrementally.
+This is appropriate for the current scope and interview constraints.
 
 ## How To Run
+
+### Runtime requirement
+
+Use Node `22.12.0` or newer. The backend depends on the built-in `node:sqlite` module, and the repo pins `22.12.0` in [`.nvmrc`](./.nvmrc).
 
 ### Install
 
@@ -242,13 +246,26 @@ npm install
 npm run dev
 ```
 
-Then open the local Vite URL in the browser.
+This starts both:
+
+- the Vite frontend on `http://localhost:5173`
+- the local API on `http://localhost:3001`
+
+Then open the Vite URL in the browser.
 
 ### Production build
 
 ```bash
 npm run build
 ```
+
+### Run the built app with the local database
+
+```bash
+npm run start
+```
+
+Then open `http://localhost:3001`.
 
 ### Lint
 
@@ -259,10 +276,12 @@ npm run lint
 ## How To Play
 
 1. Start the app.
-2. Use arrow keys or `WASD` to move.
-3. Move onto the coin to collect it.
-4. Keep collecting coins before the timer reaches zero.
-5. Press `Restart` or `Play again` to start over.
+2. Choose `Time mode` or `Coin mode`.
+3. Press `Start game`.
+4. Move with arrow keys or `WASD`.
+5. Avoid the obstacle tile.
+6. Collect coins until the mode-specific end condition is reached.
+7. Use `Restart` during a run or `Play again` after it ends.
 
 ## Manual Test Checklist
 
@@ -270,171 +289,114 @@ Use this checklist after gameplay changes:
 
 1. Confirm the player starts in the top-left corner.
 2. Confirm the coin never spawns on the player's current cell.
-3. Confirm arrow keys move exactly one cell.
-4. Confirm `WASD` also move exactly one cell.
-5. Confirm the player cannot move outside the board.
-6. Confirm collecting a coin increments the score.
-7. Confirm a new coin appears immediately after collection.
-8. Confirm the timer decreases once per second.
-9. Confirm movement stops when time reaches `0`.
-10. Confirm restart resets the whole game state.
+3. Confirm the obstacle never spawns on the player's current cell.
+4. Confirm the coin never overlaps the obstacle.
+5. Confirm arrow keys move exactly one cell.
+6. Confirm `WASD` also move exactly one cell.
+7. Confirm the player cannot move outside the board.
+8. Confirm collecting a coin increments the score.
+9. Confirm a new coin appears immediately after collection.
+10. Confirm touching the obstacle ends the run immediately.
+11. Confirm `Time mode` counts down once per second and ends at `0`.
+12. Confirm `Coin mode` counts elapsed time up once per second.
+13. Confirm `Coin mode` ends successfully at `10` coins.
+14. Confirm successful runs update the correct mode-specific best record.
+15. Confirm lost runs do not update saved records.
+16. Refresh the page and confirm records persist.
 
 ## Current Limitations
-
-These are the main gaps in the current version:
 
 - No mobile touch controls
 - No audio feedback
 - No difficulty settings
-- No obstacle or enemy mechanics
 - No combo, streak, or bonus scoring
-- No start screen or end screen beyond inline text
-- No persisted high score
+- No dedicated modal/screen transitions beyond inline panel state
+- Only one obstacle exists per run
+- Best records are mode-specific only, not per-player
 - No pause/resume
 - No tests
-- All gameplay logic lives in one component
+- Most UI orchestration still lives in one component
 
-There is also a small product mismatch in the current headline text:
+There are still two product mismatches worth noting:
 
-- The heading says, "Collect the coin before it jumps again."
-- In the actual implementation, the coin only moves when collected or when the game restarts.
-
-If the game evolves, either the copy or the mechanic should be updated so they match.
+- The repository and docs use the name `AI Adoption Game`, but the live UI still presents a generic collector experience.
+- The current theme is still visually generic rather than AI-adoption specific.
 
 ## Recommended Next Steps
 
-The best next features are the ones that improve gameplay without forcing a rewrite.
-
 ### Phase 1: Stronger MVP
 
-These features give the biggest value for the least complexity:
+1. Leaderboard
+   - Expand from single best records to ranked stored scores
+   - Reuse the existing SQLite/API path
 
-1. High score
-   - Store best score in `localStorage`
-   - Show current score vs best score
-
-2. Start and game-over screens
-   - Add a clearer game loop
-   - Improve replayability and presentation
-
-3. Touch controls
+2. Touch controls
    - Add on-screen directional buttons
    - Makes the game playable on phones and tablets
 
-4. Better feedback
-   - Add a short collection animation
+3. Better feedback
+   - Add collection animation
    - Add score pulse or timer warning states
 
-5. Copy cleanup
-   - Align messaging with actual mechanics
+4. Copy cleanup
+   - Align the title, instructions, and theme with the actual mechanics
 
 ### Phase 2: Better Game Design
 
-These features make the game more strategic:
+1. Multiple obstacles or difficulty presets
+2. Moving coin or timed relocation
+3. Bonus pickups
+4. Combo system
+5. Clearer win/loss presentation
 
-1. Difficulty modes
-   - Easy: larger timer, slower pace
-   - Normal: current settings
-   - Hard: shorter timer or larger grid
+### Phase 3: Theme Alignment
 
-2. Obstacles
-   - Block movement through some cells
-   - Makes pathing more interesting
-
-3. Moving coin
-   - Respawn or shift the coin on a timer
-   - Makes the headline mechanic real
-
-4. Bonus pickups
-   - Extra time
-   - Double-score pickup
-   - Temporary speed pickup
-
-5. Combo system
-   - Reward consecutive fast collections
-
-### Phase 3: More Depth
-
-These features move the game from a coding exercise toward a fuller arcade game:
-
-1. Multiple levels
-2. Enemy hazards
-3. Procedural board layouts
-4. Missions or goals
-5. Leaderboard backed by an API
-6. Player profiles or unlockables
-
-## Implementation Roadmap
-
-If continuing development, this is the recommended order:
-
-1. Extract pure game helpers into a small `game.ts`
-2. Add high score with `localStorage`
-3. Add start/game-over screen states
-4. Add touch controls
-5. Add at least one new mechanic such as moving coins or obstacles
-6. Add tests for movement, spawning, and scoring rules
-7. Split UI into small components if the screen grows
-
-This order keeps the game playable at every step.
+1. Re-theme coins into AI opportunities
+2. Re-theme obstacles into adoption blockers
+3. Add secondary resources such as trust or budget
+4. Introduce themed events or objectives
 
 ## Suggested Refactor Plan
 
-The current code does not need a refactor yet, but the first clean extraction would likely be:
-
-- `src/game.ts`
-  - constants
-  - `Position`
-  - `movePlayer`
-  - `getRandomCoinPosition`
+The main rules have already been extracted into `src/game.ts`. The next clean splits would likely be:
 
 - `src/components/StatusBar.tsx`
 - `src/components/Board.tsx`
+- `src/components/ModeSelector.tsx`
 - `src/components/Footer.tsx`
 
-Only do this once new features start making `App.tsx` harder to explain.
+Only do this once the screen grows enough that `App.tsx` becomes harder to explain.
 
-## Testing Strategy For Future Features
+## Testing Strategy
 
 When tests are added, start with pure rule tests first:
 
 - movement boundaries
 - unsupported key behavior
-- coin spawn validity
+- coin and obstacle spawn validity
 - score increase on collection
 - timer edge conditions
+- win/loss transitions by mode
 
 After that, add a few UI tests for:
 
 - keyboard interaction
 - restart flow
-- game-over behavior
+- mode switching
+- record submission behavior
 
 Keep the first test pass small. The goal is confidence, not heavy infrastructure.
-
-## Product Ideas For "AI Adoption" Direction
-
-If the goal is to align the game more closely with the repository name, the project can evolve from a generic collector game into a thematic "AI adoption" game.
-
-Possible directions:
-
-1. Collect AI opportunities
-   - Coins become "automation wins" or "use cases"
-
-2. Avoid adoption risks
-   - Add hazards such as compliance blockers or bad data
-
-3. Resource management
-   - Add budget, team trust, and implementation capacity
-
-4. Department-based map
-   - Different board zones represent teams like Sales, Ops, Support, and Finance
-
-5. Upgrade system
-   - Better tools unlock stronger movement or scoring bonuses
-
-This would preserve the existing grid gameplay while making the theme more distinctive.
 
 ## Additional Planning
 
 The repo already includes [FEATURE_PLAN.md](./FEATURE_PLAN.md), which contains extra theme and design ideas. A more structured delivery roadmap lives in [docs/ROADMAP.md](./docs/ROADMAP.md).
+
+## Review Summary
+
+Based on the current workspace state:
+
+- The game now includes two modes, obstacle loss, extracted rules in [src/game.ts](/Users/pablorosa/Documents/practicas/ai-adoption-game/src/game.ts), and SQLite-backed mode records in [server/server.mjs](/Users/pablorosa/Documents/practicas/ai-adoption-game/server/server.mjs).
+- The main documentation gap was that parts of the README still described the earlier single-mode implementation.
+- The gameplay preview GIF remains relevant and is still referenced here.
+
+This README now reflects the current implementation more accurately.

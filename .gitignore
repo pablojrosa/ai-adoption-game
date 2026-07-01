@@ -16,6 +16,8 @@ coverage
 .env
 .env.*
 !.env.example
+data/*.db
+data/*.db-*
 
 # Editor directories and files
 .vscode/*

@@ -4,10 +4,13 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node server/dev.mjs",
+    "dev:client": "vite",
+    "dev:server": "node --no-warnings --watch server/server.mjs",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "node --no-warnings server/server.mjs"
   },
   "dependencies": {
     "react": "^19.2.7",
