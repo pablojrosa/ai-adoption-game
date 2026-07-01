@@ -2,6 +2,8 @@
 
 A small React + TypeScript browser game built with Vite. The current MVP is a timed grid-collection game: the player moves around a 10x10 board, collects coins, and tries to maximize score before the 30-second timer ends.
 
+![Gameplay preview](docs/gameplay-preview.gif)
+
 This document covers:
 
 - what the game currently does
