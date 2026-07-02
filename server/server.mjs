@@ -21,64 +21,85 @@ database.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     mode TEXT NOT NULL CHECK(mode IN ('time', 'coin')),
     value INTEGER NOT NULL,
+    duration_seconds INTEGER,
+    coin_target INTEGER,
     created_at TEXT NOT NULL
   )
 `)
 
-const insertRecordStatement = database.prepare(`
-  INSERT INTO score_records (mode, value, created_at)
-  VALUES (?, ?, ?)
+database.exec(`
+  CREATE TABLE IF NOT EXISTS scores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    score INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+  )
 `)
 
-const selectBestTimeModeStatement = database.prepare(`
-  SELECT MAX(value) AS bestRecord
-  FROM score_records
-  WHERE mode = 'time'
-`)
+const scoreRecordColumns = database
+  .prepare(`PRAGMA table_info(score_records)`)
+  .all()
+  .map((column) => String(column.name))
 
-const selectBestCoinModeStatement = database.prepare(`
-  SELECT MIN(value) AS bestRecord
-  FROM score_records
-  WHERE mode = 'coin'
-`)
-
-const legacyScoresTableStatement = database.prepare(`
-  SELECT name
-  FROM sqlite_master
-  WHERE type = 'table' AND name = 'scores'
-`)
-
-const selectTimeRecordCountStatement = database.prepare(`
-  SELECT COUNT(*) AS recordCount
-  FROM score_records
-  WHERE mode = 'time'
-`)
-
-if (
-  legacyScoresTableStatement.get() &&
-  Number(selectTimeRecordCountStatement.get()?.recordCount ?? 0) === 0
-) {
+if (!scoreRecordColumns.includes('duration_seconds')) {
   database.exec(`
-    INSERT INTO score_records (mode, value, created_at)
-    SELECT 'time', score, created_at
-    FROM scores
+    ALTER TABLE score_records
+    ADD COLUMN duration_seconds INTEGER
   `)
 }
 
-function getBestRecords() {
-  const timeModeRecord = selectBestTimeModeStatement.get()
-  const coinModeRecord = selectBestCoinModeStatement.get()
+if (!scoreRecordColumns.includes('coin_target')) {
+  database.exec(`
+    ALTER TABLE score_records
+    ADD COLUMN coin_target INTEGER
+  `)
+}
 
-  return {
-    timeModeBest:
-      timeModeRecord?.bestRecord == null
-        ? null
-        : Number(timeModeRecord.bestRecord),
-    coinModeBest:
-      coinModeRecord?.bestRecord == null
-        ? null
-        : Number(coinModeRecord.bestRecord),
-  }
+database.exec(`
+  UPDATE score_records
+  SET duration_seconds = 30
+  WHERE mode = 'time' AND duration_seconds IS NULL
+`)
+
+database.exec(`
+  UPDATE score_records
+  SET coin_target = 10
+  WHERE mode = 'coin' AND coin_target IS NULL
+`)
+
+const insertRecordStatement = database.prepare(`
+  INSERT INTO score_records (
+    mode,
+    value,
+    duration_seconds,
+    coin_target,
+    created_at
+  )
+  VALUES (?, ?, ?, ?, ?)
+`)
+
+const countLegacyTimeRecordsStatement = database.prepare(`
+  SELECT COUNT(*) AS recordCount
+  FROM score_records
+  WHERE mode = 'time' AND duration_seconds = 30
+`)
+
+if (Number(countLegacyTimeRecordsStatement.get()?.recordCount ?? 0) === 0) {
+  database.exec(`
+    INSERT INTO score_records (
+      mode,
+      value,
+      duration_seconds,
+      coin_target,
+      created_at
+    )
+    SELECT
+      'time',
+      score,
+      30,
+      NULL,
+      created_at
+    FROM scores
+  `)
 }
 
 function sendJson(response, statusCode, payload) {
@@ -130,6 +151,77 @@ async function readRequestBody(request) {
   return Buffer.concat(chunks).toString('utf8')
 }
 
+function parseOptionalInteger(value) {
+  if (value == null || value === '') {
+    return null
+  }
+
+  const parsedValue = Number(value)
+
+  return Number.isInteger(parsedValue) ? parsedValue : Number.NaN
+}
+
+function normalizeRecordQuery(source) {
+  const mode = source.mode
+  const durationSeconds = parseOptionalInteger(source.durationSeconds)
+  const coinTarget = parseOptionalInteger(source.coinTarget)
+
+  if (mode !== 'time' && mode !== 'coin') {
+    return { error: 'Mode must be "time" or "coin".' }
+  }
+
+  if (
+    (durationSeconds !== null && Number.isNaN(durationSeconds)) ||
+    (coinTarget !== null && Number.isNaN(coinTarget))
+  ) {
+    return { error: 'Record settings must be integers when provided.' }
+  }
+
+  if (mode === 'time' && (durationSeconds == null || durationSeconds <= 0)) {
+    return { error: 'Time mode requires a positive durationSeconds value.' }
+  }
+
+  if (mode === 'coin' && (coinTarget == null || coinTarget <= 0)) {
+    return { error: 'Coin mode requires a positive coinTarget value.' }
+  }
+
+  return {
+    mode,
+    durationSeconds: mode === 'time' ? durationSeconds : null,
+    coinTarget: mode === 'coin' ? coinTarget : null,
+  }
+}
+
+function getBestRecord(query) {
+  const { mode, durationSeconds, coinTarget } = query
+
+  const statement =
+    mode === 'time'
+      ? database.prepare(`
+          SELECT MAX(value) AS bestValue
+          FROM score_records
+          WHERE mode = 'time' AND duration_seconds = ?
+        `)
+      : database.prepare(`
+          SELECT MIN(value) AS bestValue
+          FROM score_records
+          WHERE mode = 'coin' AND coin_target = ?
+        `)
+
+  const parameter = mode === 'time' ? durationSeconds : coinTarget
+  const result = statement.get(parameter)
+
+  return result?.bestValue == null ? null : Number(result.bestValue)
+}
+
+function isNewBestRecord(mode, value, currentBest) {
+  if (currentBest == null) {
+    return true
+  }
+
+  return mode === 'time' ? value > currentBest : value < currentBest
+}
+
 async function serveStaticAsset(response, requestPath) {
   const relativePath =
     requestPath === '/' ? 'index.html' : requestPath.replace(/^\//, '')
@@ -154,12 +246,29 @@ async function requestHandler(request, response) {
   const { pathname } = requestUrl
 
   if (request.method === 'GET' && pathname === '/api/high-score') {
-    sendJson(response, 200, { bestScore: getBestRecords().timeModeBest ?? 0 })
+    const bestValue = getBestRecord({
+      mode: 'time',
+      durationSeconds: 30,
+      coinTarget: null,
+    })
+
+    sendJson(response, 200, { bestScore: bestValue ?? 0 })
     return
   }
 
   if (request.method === 'GET' && pathname === '/api/records') {
-    sendJson(response, 200, { records: getBestRecords() })
+    const query = normalizeRecordQuery({
+      mode: requestUrl.searchParams.get('mode'),
+      durationSeconds: requestUrl.searchParams.get('durationSeconds'),
+      coinTarget: requestUrl.searchParams.get('coinTarget'),
+    })
+
+    if ('error' in query) {
+      sendJson(response, 400, { error: query.error })
+      return
+    }
+
+    sendJson(response, 200, { bestValue: getBestRecord(query) })
     return
   }
 
@@ -184,17 +293,18 @@ async function requestHandler(request, response) {
       return
     }
 
-    const previousBestRecords = getBestRecords()
+    const legacyQuery = {
+      mode: 'time',
+      durationSeconds: 30,
+      coinTarget: null,
+    }
+    const previousBestValue = getBestRecord(legacyQuery)
 
-    insertRecordStatement.run('time', score, new Date().toISOString())
-
-    const records = getBestRecords()
+    insertRecordStatement.run('time', score, 30, null, new Date().toISOString())
 
     sendJson(response, 201, {
-      records,
-      isNewBest:
-        previousBestRecords.timeModeBest == null ||
-        score > previousBestRecords.timeModeBest,
+      bestValue: getBestRecord(legacyQuery),
+      isNewBest: isNewBestRecord('time', score, previousBestValue),
     })
     return
   }
@@ -211,13 +321,14 @@ async function requestHandler(request, response) {
       return
     }
 
-    const mode = payload?.mode
-    const value = payload?.value
+    const query = normalizeRecordQuery(payload)
 
-    if (mode !== 'time' && mode !== 'coin') {
-      sendJson(response, 400, { error: 'Mode must be "time" or "coin".' })
+    if ('error' in query) {
+      sendJson(response, 400, { error: query.error })
       return
     }
+
+    const value = payload?.value
 
     if (!Number.isInteger(value) || value < 0) {
       sendJson(response, 400, {
@@ -226,21 +337,19 @@ async function requestHandler(request, response) {
       return
     }
 
-    const previousBestRecords = getBestRecords()
+    const previousBestValue = getBestRecord(query)
 
-    insertRecordStatement.run(mode, value, new Date().toISOString())
-
-    const records = getBestRecords()
-    const previousBestValue =
-      mode === 'time'
-        ? previousBestRecords.timeModeBest
-        : previousBestRecords.coinModeBest
+    insertRecordStatement.run(
+      query.mode,
+      value,
+      query.durationSeconds,
+      query.coinTarget,
+      new Date().toISOString(),
+    )
 
     sendJson(response, 201, {
-      records,
-      isNewBest:
-        previousBestValue == null ||
-        (mode === 'time' ? value > previousBestValue : value < previousBestValue),
+      bestValue: getBestRecord(query),
+      isNewBest: isNewBestRecord(query.mode, value, previousBestValue),
     })
     return
   }

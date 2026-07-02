@@ -1,40 +1,53 @@
-import { useEffect, useState } from 'react'
 import './App.css'
+import { useEffect, useState, type ChangeEvent } from 'react'
 import {
-  COIN_MODE_TARGET,
-  GAME_DURATION_SECONDS,
+  COIN_MODE_OPTIONS,
+  DEFAULT_COIN_MODE_TARGET,
+  DEFAULT_TIME_MODE_SECONDS,
   GRID_SIZE,
   START_POSITION,
+  TIME_MODE_OPTIONS,
+  createRecordQuery,
   createRoundLayout,
   getRandomAvailablePosition,
   movePlayer,
   positionsEqual,
-  type BestRecords,
   type GameMode,
   type GamePhase,
+  type PersistedRecord,
   type Position,
 } from './game.ts'
 
-type PersistedRecord = {
-  mode: GameMode
-  value: number
-}
+async function fetchBestRecord(
+  mode: GameMode,
+  durationSeconds: number,
+  coinTarget: number,
+  signal?: AbortSignal,
+) {
+  const query = createRecordQuery(mode, durationSeconds, coinTarget)
+  const searchParams = new URLSearchParams({
+    mode: query.mode,
+  })
 
-const EMPTY_RECORDS: BestRecords = {
-  timeModeBest: null,
-  coinModeBest: null,
-}
-
-async function fetchBestRecords(signal?: AbortSignal) {
-  const response = await fetch('/api/records', { signal })
-
-  if (!response.ok) {
-    throw new Error('Could not load the best records.')
+  if (query.durationSeconds != null) {
+    searchParams.set('durationSeconds', String(query.durationSeconds))
   }
 
-  const data = (await response.json()) as { records: BestRecords }
+  if (query.coinTarget != null) {
+    searchParams.set('coinTarget', String(query.coinTarget))
+  }
 
-  return data.records
+  const response = await fetch(`/api/records?${searchParams.toString()}`, {
+    signal,
+  })
+
+  if (!response.ok) {
+    throw new Error('Could not load the best record.')
+  }
+
+  const data = (await response.json()) as { bestValue: number | null }
+
+  return data.bestValue
 }
 
 async function saveRecord(record: PersistedRecord) {
@@ -51,53 +64,56 @@ async function saveRecord(record: PersistedRecord) {
   }
 
   const data = (await response.json()) as {
-    records: BestRecords
+    bestValue: number | null
     isNewBest: boolean
   }
 
   return data
 }
 
-function getFreshRoundState() {
+function getFreshRoundState(timeModeSeconds: number) {
   const layout = createRoundLayout(START_POSITION)
 
   return {
     player: START_POSITION,
     score: 0,
-    timeLeft: GAME_DURATION_SECONDS,
+    timeLeft: timeModeSeconds,
     elapsedTime: 0,
     coin: layout.coin,
     obstacle: layout.obstacle,
   }
 }
 
-const INITIAL_ROUND_STATE = getFreshRoundState()
-
-function formatBestValue(mode: GameMode, records: BestRecords) {
-  if (mode === 'time') {
-    return `${records.timeModeBest ?? 0}`
-  }
-
-  return records.coinModeBest == null ? '--' : `${records.coinModeBest}s`
-}
-
 function formatModeName(mode: GameMode) {
   return mode === 'time' ? 'Time mode' : 'Coin mode'
 }
 
+function formatBestValue(mode: GameMode, bestValue: number | null) {
+  if (bestValue == null) {
+    return mode === 'time' ? 'No record yet' : 'No record yet'
+  }
+
+  return mode === 'time' ? `${bestValue}` : `${bestValue}s`
+}
+
 function App() {
   const [selectedMode, setSelectedMode] = useState<GameMode>('time')
-  const [phase, setPhase] = useState<GamePhase>('ready')
-  const [player, setPlayer] = useState<Position>(START_POSITION)
-  const [score, setScore] = useState(0)
-  const [bestRecords, setBestRecords] = useState<BestRecords>(EMPTY_RECORDS)
-  const [bestRecordsError, setBestRecordsError] = useState<string | null>(null)
-  const [timeLeft, setTimeLeft] = useState(GAME_DURATION_SECONDS)
-  const [elapsedTime, setElapsedTime] = useState(0)
-  const [coin, setCoin] = useState<Position>(INITIAL_ROUND_STATE.coin)
-  const [obstacle, setObstacle] = useState<Position>(
-    INITIAL_ROUND_STATE.obstacle,
+  const [timeModeSeconds, setTimeModeSeconds] = useState(
+    DEFAULT_TIME_MODE_SECONDS,
   )
+  const [coinModeTarget, setCoinModeTarget] = useState(
+    DEFAULT_COIN_MODE_TARGET,
+  )
+  const [phase, setPhase] = useState<GamePhase>('ready')
+  const initialRoundState = getFreshRoundState(timeModeSeconds)
+  const [player, setPlayer] = useState<Position>(initialRoundState.player)
+  const [score, setScore] = useState(initialRoundState.score)
+  const [bestValue, setBestValue] = useState<number | null>(null)
+  const [bestRecordError, setBestRecordError] = useState<string | null>(null)
+  const [timeLeft, setTimeLeft] = useState(initialRoundState.timeLeft)
+  const [elapsedTime, setElapsedTime] = useState(initialRoundState.elapsedTime)
+  const [coin, setCoin] = useState<Position>(initialRoundState.coin)
+  const [obstacle, setObstacle] = useState<Position>(initialRoundState.obstacle)
   const [pendingRecord, setPendingRecord] = useState<PersistedRecord | null>(
     null,
   )
@@ -110,8 +126,8 @@ function App() {
   const timeValue =
     selectedMode === 'time' ? `${timeLeft}s` : `${elapsedTime}s`
 
-  function applyFreshRound() {
-    const nextRound = getFreshRoundState()
+  function applyFreshRound(durationSeconds = timeModeSeconds) {
+    const nextRound = getFreshRoundState(durationSeconds)
 
     setPlayer(nextRound.player)
     setScore(nextRound.score)
@@ -128,30 +144,29 @@ function App() {
     setPhase('playing')
   }
 
-  function resetToReady(nextMode = selectedMode) {
-    setSelectedMode(nextMode)
-    applyFreshRound()
-    setPhase('ready')
-  }
-
   useEffect(() => {
     const abortController = new AbortController()
 
-    fetchBestRecords(abortController.signal)
-      .then((records) => {
-        setBestRecords(records)
-        setBestRecordsError(null)
+    fetchBestRecord(
+      selectedMode,
+      timeModeSeconds,
+      coinModeTarget,
+      abortController.signal,
+    )
+      .then((nextBestValue) => {
+        setBestValue(nextBestValue)
+        setBestRecordError(null)
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') {
           return
         }
 
-        setBestRecordsError('Best records unavailable')
+        setBestRecordError('Best record unavailable')
       })
 
     return () => abortController.abort()
-  }, [])
+  }, [coinModeTarget, selectedMode, timeModeSeconds])
 
   useEffect(() => {
     if (!isGameActive) {
@@ -163,7 +178,10 @@ function App() {
         setTimeLeft((currentTime) => {
           if (currentTime <= 1) {
             setPhase('timeUp')
-            setPendingRecord({ mode: 'time', value: score })
+            setPendingRecord({
+              ...createRecordQuery(selectedMode, timeModeSeconds, coinModeTarget),
+              value: score,
+            })
             return 0
           }
 
@@ -177,7 +195,7 @@ function App() {
     }, 1000)
 
     return () => window.clearInterval(timerId)
-  }, [isGameActive, score, selectedMode])
+  }, [coinModeTarget, isGameActive, score, selectedMode, timeModeSeconds])
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -211,19 +229,39 @@ function App() {
       const nextScore = score + 1
       setScore(nextScore)
 
-      if (selectedMode === 'coin' && nextScore >= COIN_MODE_TARGET) {
+      if (selectedMode === 'coin' && nextScore >= coinModeTarget) {
+        const completionTime = elapsedTime + 1
+
+        setElapsedTime(completionTime)
         setPhase('won')
-        setPendingRecord({ mode: 'coin', value: elapsedTime })
+        setPendingRecord({
+          ...createRecordQuery(selectedMode, timeModeSeconds, coinModeTarget),
+          value: completionTime,
+        })
         return
       }
 
-      setCoin(getRandomAvailablePosition([nextPlayer, obstacle]))
+      const nextObstacle = getRandomAvailablePosition([nextPlayer])
+      const nextCoin = getRandomAvailablePosition([nextPlayer, nextObstacle])
+
+      setObstacle(nextObstacle)
+      setCoin(nextCoin)
     }
 
     window.addEventListener('keydown', handleKeyDown)
 
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [coin, elapsedTime, isGameActive, obstacle, player, score, selectedMode])
+  }, [
+    coin,
+    coinModeTarget,
+    elapsedTime,
+    isGameActive,
+    obstacle,
+    player,
+    score,
+    selectedMode,
+    timeModeSeconds,
+  ])
 
   useEffect(() => {
     if (pendingRecord == null || hasSubmittedRecord) {
@@ -233,20 +271,20 @@ function App() {
     let isCancelled = false
 
     saveRecord(pendingRecord)
-      .then(({ records }) => {
+      .then(({ bestValue: nextBestValue }) => {
         if (isCancelled) {
           return
         }
 
-        setBestRecords(records)
-        setBestRecordsError(null)
+        setBestValue(nextBestValue)
+        setBestRecordError(null)
       })
       .catch(() => {
         if (isCancelled) {
           return
         }
 
-        setBestRecordsError('Best records unavailable')
+        setBestRecordError('Best record unavailable')
       })
 
     setHasSubmittedRecord(true)
@@ -261,48 +299,71 @@ function App() {
       return
     }
 
-    resetToReady(nextMode)
+    setSelectedMode(nextMode)
+    applyFreshRound()
+    setPhase('ready')
   }
 
-  function handlePrimaryAction() {
+  function handleTimeModeDurationChange(event: ChangeEvent<HTMLSelectElement>) {
     if (isGameActive) {
-      startRound()
       return
     }
 
-    startRound()
+    const nextDuration = Number(event.target.value)
+
+    setTimeModeSeconds(nextDuration)
+    applyFreshRound(nextDuration)
+    setPhase('ready')
   }
 
-  const bestValue = bestRecordsError
-    ? '--'
-    : formatBestValue(selectedMode, bestRecords)
+  function handleCoinModeTargetChange(event: ChangeEvent<HTMLSelectElement>) {
+    if (isGameActive) {
+      return
+    }
+
+    setCoinModeTarget(Number(event.target.value))
+    applyFreshRound()
+    setPhase('ready')
+  }
 
   let instructions =
-    'Choose a mode, then start a round. Move with arrow keys or WASD.'
+    'Choose a mode, adjust its settings, then start a round. Move with arrow keys or WASD.'
 
   if (selectedMode === 'time') {
-    instructions =
-      'Collect as many coins as possible in 30 seconds while avoiding the obstacle.'
+    instructions = `Collect as many coins as possible in ${timeModeSeconds} seconds while avoiding the obstacle.`
   } else if (selectedMode === 'coin') {
-    instructions = `Collect ${COIN_MODE_TARGET} coins as fast as possible while avoiding the obstacle.`
+    instructions = `Collect ${coinModeTarget} coins as fast as possible while avoiding the obstacle.`
   }
 
   let footerMessage = instructions
+  let resultToneClass = 'result-banner-neutral'
 
   if (phase === 'timeUp') {
     footerMessage = `Time's up. Final score: ${score}.`
+    resultToneClass = 'result-banner-success'
   } else if (phase === 'won') {
     footerMessage = `Target reached in ${elapsedTime}s. Final coins: ${score}.`
+    resultToneClass = 'result-banner-success'
   } else if (phase === 'lost') {
     footerMessage = 'You hit the obstacle and lost the run.'
+    resultToneClass = 'result-banner-loss'
   }
 
-  const primaryActionLabel =
-    phase === 'ready'
-      ? 'Start game'
-      : isGameActive
-        ? 'Restart'
-        : 'Play again'
+  const bestDisplayValue = bestRecordError
+    ? 'Record unavailable'
+    : formatBestValue(selectedMode, bestValue)
+
+  const modeGoalText =
+    selectedMode === 'time'
+      ? `Goal: survive ${timeModeSeconds}s and collect as many coins as possible.`
+      : `Goal: collect ${coinModeTarget} coins in the least time possible.`
+
+  const modeRecordText =
+    bestRecordError == null
+      ? `Best for this setup: ${formatBestValue(selectedMode, bestValue)}`
+      : 'Best for this setup: Record unavailable'
+
+  const primaryActionLabel = phase === 'ready' ? 'Start game' : 'Play again'
 
   return (
     <main className="game-shell">
@@ -332,6 +393,48 @@ function App() {
           </button>
         </div>
 
+        <div className="mode-config" aria-label="Mode settings">
+          {selectedMode === 'time' ? (
+            <label className="config-field" htmlFor="time-mode-seconds">
+              <span className="status-label">Seconds to Play</span>
+              <select
+                id="time-mode-seconds"
+                className="config-select"
+                value={timeModeSeconds}
+                onChange={handleTimeModeDurationChange}
+                disabled={isGameActive}
+              >
+                {TIME_MODE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option} seconds
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <label className="config-field" htmlFor="coin-mode-target">
+              <span className="status-label">Coins to Collect</span>
+              <select
+                id="coin-mode-target"
+                className="config-select"
+                value={coinModeTarget}
+                onChange={handleCoinModeTargetChange}
+                disabled={isGameActive}
+              >
+                {COIN_MODE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option} coins
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <div className="config-summary">
+            <p className="config-summary-line">{modeGoalText}</p>
+            <p className="config-summary-line">{modeRecordText}</p>
+          </div>
+        </div>
+
         <div className="status-bar" aria-label="Game status">
           <div className="status-card">
             <span className="status-label">{scoreLabel}</span>
@@ -339,7 +442,7 @@ function App() {
           </div>
           <div className="status-card">
             <span className="status-label">{bestLabel}</span>
-            <strong>{bestValue}</strong>
+            <strong>{bestDisplayValue}</strong>
           </div>
           <div className="status-card">
             <span className="status-label">Player</span>
@@ -386,11 +489,11 @@ function App() {
         </div>
 
         <div className="footer-bar">
-          <p className="instructions">{footerMessage}</p>
+          <p className={`result-banner ${resultToneClass}`}>{footerMessage}</p>
           <button
             type="button"
             className="restart-button"
-            onClick={handlePrimaryAction}
+            onClick={startRound}
           >
             {primaryActionLabel}
           </button>
