@@ -38,7 +38,7 @@ function formatModeName(mode: GameMode) {
 
 function formatBestValue(mode: GameMode, bestValue: number | null) {
   if (bestValue == null) {
-    return mode === 'time' ? 'No record yet' : 'No record yet'
+    return '-'
   }
 
   return mode === 'time' ? `${bestValue}` : `${bestValue}s`
