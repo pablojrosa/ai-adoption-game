@@ -39,10 +39,10 @@ The current loop is intentionally simple:
 - Each round places one coin and one obstacle on valid cells.
 - The player moves with arrow keys or `WASD`.
 - Collecting a coin increases the score by `1`.
-- The next coin respawns immediately in another valid cell.
+- After each coin capture, both the next coin and the obstacle respawn into new valid cells.
 - Touching the obstacle ends the run immediately as a loss.
-- `Time mode` ends when the 30-second timer reaches `0`.
-- `Coin mode` ends when the player collects `10` coins.
+- `Time mode` ends when the selected timer reaches `0`.
+- `Coin mode` ends when the player collects the selected coin target.
 - The player can restart at any time.
 
 This is still a strong interview MVP because it demonstrates:
@@ -61,8 +61,8 @@ Successful completed runs are stored in a local SQLite database.
 - The backend creates `data/game.db` automatically.
 - Records are read from `/api/records`.
 - Successful results are posted to `/api/records`.
-- `Time mode` stores the highest score.
-- `Coin mode` stores the lowest completion time.
+- `Time mode` stores the highest score for the selected round duration.
+- `Coin mode` stores the lowest completion time for the selected coin target.
 - Lost runs are not saved.
 - If an older `scores` table exists, the backend migrates it into the new record format for time mode.
 
@@ -75,23 +75,23 @@ The server still exposes `/api/high-score` and `/api/scores` for compatibility, 
 - Grid size: `10 x 10`
 - Total cells: `100`
 - Player start position: row `0`, column `0`
-- One obstacle exists for the duration of each round
+- One obstacle exists at all times during a round
 - The coin never overlaps the player or obstacle
 
 ### Modes
 
 `Time mode`
 
-- Starts with `30` seconds
+- Supports `15`, `30`, `45`, or `60` seconds
 - Score increases by collecting coins
 - The run ends when time reaches `0`
-- Best record is the highest score
+- Best record is the highest score for the selected duration
 
 `Coin mode`
 
 - Tracks `elapsedTime` instead of a countdown
-- The run ends when the player reaches `10` coins
-- Best record is the lowest completion time
+- The run ends when the player reaches the selected coin target
+- Best record is the lowest completion time for the selected target
 
 ### Movement
 
@@ -105,6 +105,7 @@ The server still exposes `/api/high-score` and `/api/scores` for compatibility, 
 ### Hazard
 
 - One obstacle token is placed each round.
+- After each coin capture, the obstacle relocates before the next move.
 - Touching it ends the run immediately with a loss.
 
 ### Restart
@@ -134,7 +135,7 @@ The app is a single screen with these main areas:
 The status bar shows:
 
 - current score or coin count
-- best record for the selected mode
+- best record for the selected mode and current mode setting
 - current player coordinates
 - time left or elapsed time, depending on mode
 
@@ -182,8 +183,8 @@ data/
 
 This file now owns the reusable game rules and types. It contains:
 
-- constants such as `GRID_SIZE`, `GAME_DURATION_SECONDS`, and `COIN_MODE_TARGET`
-- `Position`, `GameMode`, `GamePhase`, and `BestRecords`
+- constants such as `GRID_SIZE`, `DEFAULT_TIME_MODE_SECONDS`, and `DEFAULT_COIN_MODE_TARGET`
+- `Position`, `GameMode`, `GamePhase`, `RecordQuery`, and `PersistedRecord`
 - `positionsEqual`
 - `movePlayer`
 - `getRandomAvailablePosition`
@@ -277,11 +278,14 @@ npm run lint
 
 1. Start the app.
 2. Choose `Time mode` or `Coin mode`.
-3. Press `Start game`.
-4. Move with arrow keys or `WASD`.
-5. Avoid the obstacle tile.
-6. Collect coins until the mode-specific end condition is reached.
-7. Use `Restart` during a run or `Play again` after it ends.
+3. Adjust the mode-specific setting:
+   - `Time mode`: choose how many seconds the round lasts
+   - `Coin mode`: choose how many coins must be collected
+4. Press `Start game`.
+5. Move with arrow keys or `WASD`.
+6. Avoid the obstacle tile.
+7. Collect coins until the mode-specific end condition is reached.
+8. Use `Restart` during a run or `Play again` after it ends.
 
 ## Manual Test Checklist
 
@@ -296,13 +300,16 @@ Use this checklist after gameplay changes:
 7. Confirm the player cannot move outside the board.
 8. Confirm collecting a coin increments the score.
 9. Confirm a new coin appears immediately after collection.
-10. Confirm touching the obstacle ends the run immediately.
-11. Confirm `Time mode` counts down once per second and ends at `0`.
-12. Confirm `Coin mode` counts elapsed time up once per second.
-13. Confirm `Coin mode` ends successfully at `10` coins.
-14. Confirm successful runs update the correct mode-specific best record.
-15. Confirm lost runs do not update saved records.
-16. Refresh the page and confirm records persist.
+10. Confirm the obstacle also moves to a new valid cell after each collection.
+11. Confirm the new coin and obstacle never overlap each other or the player.
+12. Confirm touching the obstacle ends the run immediately.
+13. Confirm `Time mode` counts down once per second and ends at `0`.
+14. Confirm changing Time mode duration changes the countdown and the saved best lookup.
+15. Confirm `Coin mode` counts elapsed time up once per second.
+16. Confirm changing Coin mode target changes the win condition and the saved best lookup.
+17. Confirm successful runs update the correct mode-specific best record.
+18. Confirm lost runs do not update saved records.
+19. Refresh the page and confirm records persist.
 
 ## Current Limitations
 
