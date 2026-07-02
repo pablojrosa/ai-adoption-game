@@ -1,4 +1,4 @@
-# AI Adoption Game
+# Coin Game
 
 Arcade-style grid game built with React, TypeScript, and Vite. The current playable app ships as `Grid Collector` with two modes:
 
@@ -6,8 +6,6 @@ Arcade-style grid game built with React, TypeScript, and Vite. The current playa
 - `Coin mode`: reach the target coin count as fast as possible
 
 The project also includes a small optional Node + SQLite server for local record persistence.
-
-![Gameplay preview](docs/gameplay-preview.gif)
 
 ## Tech Stack
 
@@ -88,7 +86,7 @@ The repository includes a GitHub Pages deployment workflow in `.github/workflows
 Important behavior:
 
 - Pages hosts only the static frontend
-- the Pages build uses `PAGES_BASE_PATH=/ai-adoption-game/`
+- the Pages build uses `PAGES_BASE_PATH=/coin-game/`
 - the public site uses browser `localStorage` for records, not SQLite
 
 If the repository name changes, update the Pages base path in the workflow.
