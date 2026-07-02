@@ -41,6 +41,7 @@ function installFetchMock(options?: {
 
 describe('App harness', () => {
   beforeEach(() => {
+    window.localStorage.clear()
     vi.restoreAllMocks()
   })
 

@@ -1,6 +1,6 @@
 # AI Adoption Game
 
-A small full-stack browser game built with React, TypeScript, Vite, and a tiny Node + SQLite API. The current playable build supports two arcade modes on the same 10x10 grid: a timed score-attack mode and a coin-race mode with an instant-loss obstacle.
+A small browser game built with React, TypeScript, Vite, and an optional tiny Node + SQLite API for local persistence. The current playable build supports two arcade modes on the same 10x10 grid: a timed score-attack mode and a coin-race mode with an instant-loss obstacle.
 
 ![Gameplay preview](docs/gameplay-preview.gif)
 
@@ -56,11 +56,16 @@ This is still a strong interview MVP because it demonstrates:
 
 ## Persistence
 
-Successful completed runs are stored in a local SQLite database.
+Successful completed runs are stored with two persistence paths:
 
-- The backend creates `data/game.db` automatically.
-- Records are read from `/api/records`.
-- Successful results are posted to `/api/records`.
+- Local server mode:
+  - The backend creates `data/game.db` automatically.
+  - Records are read from `/api/records`.
+  - Successful results are posted to `/api/records`.
+- Static hosting mode:
+  - If `/api/records` is unavailable, the frontend falls back to browser `localStorage`.
+  - This keeps GitHub Pages playable without a backend, but records are per-browser rather than shared.
+
 - `Time mode` stores the highest score for the selected round duration.
 - `Coin mode` stores the lowest completion time for the selected coin target.
 - Lost runs are not saved.
@@ -169,6 +174,7 @@ src/
   App.tsx       main game logic and UI
   App.css       game-specific styles
   game.ts       constants, types, and pure game helpers
+  records.ts    backend-first records access with localStorage fallback
   index.css     global styles
   main.tsx      React entry point
 server/
@@ -198,11 +204,20 @@ This is the main UI coordinator. It contains:
 
 - mode selection
 - game phases (`ready`, `playing`, `timeUp`, `won`, `lost`)
-- record fetching and submission
+- record fetching and submission through `src/records.ts`
 - timer lifecycle
 - keyboard handling
 - round reset/start behavior
 - board rendering and footer messaging
+
+### `src/records.ts`
+
+Responsible for:
+
+- fetching best records from `/api/records` when available
+- saving successful runs to `/api/records` when available
+- falling back to browser `localStorage` when the API is unavailable
+- keeping the Pages deployment playable without any backend
 
 ### `server/server.mjs`
 
@@ -213,6 +228,16 @@ Responsible for:
 - returning current best records
 - saving successful run records
 - serving the built frontend with the API when using `npm run start`
+
+## GitHub Pages
+
+This repo can deploy the frontend as a static GitHub Pages site.
+
+- The workflow lives at `.github/workflows/deploy-pages.yml`.
+- It builds the app with `PAGES_BASE_PATH=/ai-adoption-game/`.
+- Static deployments use browser `localStorage` for records because GitHub Pages cannot run the Node + SQLite server.
+
+If the repository name changes, update the `PAGES_BASE_PATH` value in the workflow.
 
 ## Technical Decisions
 

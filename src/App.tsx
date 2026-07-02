@@ -17,59 +17,7 @@ import {
   type PersistedRecord,
   type Position,
 } from './game.ts'
-
-async function fetchBestRecord(
-  mode: GameMode,
-  durationSeconds: number,
-  coinTarget: number,
-  signal?: AbortSignal,
-) {
-  const query = createRecordQuery(mode, durationSeconds, coinTarget)
-  const searchParams = new URLSearchParams({
-    mode: query.mode,
-  })
-
-  if (query.durationSeconds != null) {
-    searchParams.set('durationSeconds', String(query.durationSeconds))
-  }
-
-  if (query.coinTarget != null) {
-    searchParams.set('coinTarget', String(query.coinTarget))
-  }
-
-  const response = await fetch(`/api/records?${searchParams.toString()}`, {
-    signal,
-  })
-
-  if (!response.ok) {
-    throw new Error('Could not load the best record.')
-  }
-
-  const data = (await response.json()) as { bestValue: number | null }
-
-  return data.bestValue
-}
-
-async function saveRecord(record: PersistedRecord) {
-  const response = await fetch('/api/records', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(record),
-  })
-
-  if (!response.ok) {
-    throw new Error('Could not save the result.')
-  }
-
-  const data = (await response.json()) as {
-    bestValue: number | null
-    isNewBest: boolean
-  }
-
-  return data
-}
+import { fetchBestRecord, saveRecord } from './records.ts'
 
 function getFreshRoundState(timeModeSeconds: number) {
   const layout = createRoundLayout(START_POSITION)
